@@ -10,3 +10,6 @@ psutil
 pycryptodome
 requests
 web3
+timedelta
+slowapi
+hvac
