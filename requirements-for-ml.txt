@@ -1,0 +1,7 @@
+#format:
+#{Module >= Version}
+
+numpy>=1.24
+scikit-learn>=1.3
+tensorflow>=2.12
+joblib>=1.3
