@@ -100,9 +100,7 @@ def calculate_raw_error(model, scaler, seq):
     error = np.mean(np.abs(scaled_seq - reconstructed_seq)) 
     return float(error)
 
-# ------------------------
-# Class wrapper for fusion
-# ------------------------
+
 class CloudLSTMDetector:
     def __init__(self):
         self.model, self.scaler = load_cloud_lstm()
@@ -137,9 +135,7 @@ class CloudLSTMDetector:
         
         # 2. Normalize the error to a 0-1 scale using calibrated bounds
         normalized_score = (raw_error - self.min_error) / (self.max_error - self.min_error)
-        
         # Clip the result to ensure it strictly stays within [0, 1] range,
-        # even if a new error exceeds the calibrated maximum error.
         return float(np.clip(normalized_score, 0, 1))
 
 if __name__ == "__main__":

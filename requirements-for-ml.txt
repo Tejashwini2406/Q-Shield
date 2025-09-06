@@ -1,6 +1,7 @@
 #format:
 #{Module >= Version}
 
+pandas>=2.3.2
 numpy>=1.24
 scikit-learn>=1.3
 tensorflow>=2.12
