@@ -1,10 +1,11 @@
-#♡ security.py
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 import jwt
 from datetime import datetime, timezone, timedelta
+import time
+from fastapi import HTTPException
 
-SECRET_KEY = "supersecretjwtkey"
+SECRET_KEY = "supersecretkey" 
 
 #♡ AES-GCM Encryption
 def encrypt_aes_gcm(aes_key: bytes, plaintext: str):
@@ -23,7 +24,7 @@ def decrypt_aes_gcm(aes_key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes)
 def create_jwt(did: str):
     payload = {
         "sub": did,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+        "exp": int(time.time()) + 24 * 3600  # ♡ numeric timestamp
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     return token
@@ -37,3 +38,5 @@ def verify_jwt(token: str):
         raise Exception("JWT expired")
     except jwt.InvalidTokenError:
         raise Exception("Invalid JWT")
+
+
