@@ -11,13 +11,35 @@ from web3 import Web3
 import hashlib
 from typing import List
 from security import create_jwt, verify_jwt, decrypt_aes_gcm, encrypt_aes_gcm
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import base64, secrets, os, jwt, hvac
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.responses import JSONResponse
+import secrets
+from fastapi import Request  
+#♡ PostgreSQL DB session and models
+from db import SessionLocal, Device, Telemetry, Alert, OTAUpdate, EventLog, BatchLog, AnomalyLog, init_db, get_db
+
+#♡ Initialize database
+init_db()
+db = SessionLocal()
 
 app = FastAPI(title="QShield+ Backend", version="1.0.0")
+#♡ Rate limiter setup
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded,
+    lambda request, exc: JSONResponse({"detail": "Too many requests"}, status_code=429))
 security = HTTPBearer()
 
-#♡ Original in-memory DB (do not change) ♡
-DEVICES = {}
-TELEMETRY = {}
+#♡ Vault client config (replace with HSM/KMS if needed)
+VAULT_ADDR = os.getenv("VAULT_ADDR", "http://127.0.0.1:8200")
+VAULT_TOKEN = os.getenv("VAULT_TOKEN", "root-token")
+vault_client = hvac.Client(url=VAULT_ADDR, token=VAULT_TOKEN)
 
 #=== Blockchain and IPFS Setup and Helpers ===
 HARDHAT_RPC_URL = "http://127.0.0.1:8545"
@@ -39,11 +61,12 @@ except FileNotFoundError:
 #♡ Original Pydantic models ♡
 class RegisterRequest(BaseModel):
     device_name: str
+    device_pub_pem: str  # ♡ PEM from device
 
 class RegisterResponse(BaseModel):
     did: str
     jwt: str
-    aes_key: str
+    encrypted_aes_key_b64: str  # ♡ AES encrypted with device public key
 
 class TelemetryRequest(BaseModel):
     payload: dict
@@ -111,26 +134,110 @@ def log_event_to_blockchain(did_str: str, event_type: str, details: str):
         logging.error(f"Error logging event: {e}")
         return None
 
-#♡ Original device registration endpoint ♡
+#♡ Load/generate RSA keypair (Vault-backed)
+CURRENT_PRIVATE_KEY_PEM = None
+CURRENT_PUBLIC_KEY_PEM = None
+
+def load_jwt_keys_from_vault():
+    global CURRENT_PRIVATE_KEY_PEM, CURRENT_PUBLIC_KEY_PEM
+    try:
+        resp = vault_client.secrets.kv.v2.read_secret_version(
+            path="jwt_keys", mount_point="qshield-jwt")
+        data = resp["data"]["data"]
+        CURRENT_PRIVATE_KEY_PEM = data["private_pem"].encode()
+        CURRENT_PUBLIC_KEY_PEM = data["public_pem"].encode()
+    except Exception:
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        CURRENT_PRIVATE_KEY_PEM = key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        CURRENT_PUBLIC_KEY_PEM = key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+load_jwt_keys_from_vault()
+
+def create_jwt_rs256(did: str, role: str = "device") -> str:
+    payload = {
+        "sub": did,
+        "role": role,
+        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
+    }
+    return jwt.encode(payload, CURRENT_PRIVATE_KEY_PEM, algorithm="RS256")
+
+def verify_jwt_rs256(token: str) -> dict:
+    try:
+        return jwt.decode(token, CURRENT_PUBLIC_KEY_PEM, algorithms=["RS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+#♡ Role-based access control
+def require_role(required_role: str):
+    def checker(token: HTTPAuthorizationCredentials = Depends(security)):
+        claims = verify_jwt_rs256(token.credentials)
+        role = claims.get("role")
+        if role != required_role and role != "admin":
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return claims
+    return checker
+
+#♡ register endpoint
 @app.post("/register", response_model=RegisterResponse)
 def register_device(req: RegisterRequest):
-    import secrets
-    did = f"did:device:{secrets.token_urlsafe(6)}"
-    aes_key = secrets.token_bytes(32)
-    DEVICES[did] = {"name": req.device_name, "aes_key": aes_key}
-    jwt_token = create_jwt(did)
-    #=== Log device registration event on blockchain ===
-    tx_hash = log_event_to_blockchain(did, "DeviceRegistration", f"Registered device {req.device_name}")
-    return RegisterResponse(did=did, jwt=jwt_token, aes_key=aes_key.hex())
+    try:
+        db = next(get_db())
+        did = f"did:device:{secrets.token_urlsafe(6)}"
+        aes_key = secrets.token_bytes(32)
 
-#♡ Original telemetry endpoint (with encryption handling) ♡
+        # Store device in DB
+        device = Device(did=did, name=req.device_name, aes_key=aes_key)
+        db.add(device)
+        db.commit()
+        db.refresh(device)
+
+        # Load device public key
+        device_pub = serialization.load_pem_public_key(req.device_pub_pem.encode())
+
+        # Encrypt AES key
+        encrypted_aes = device_pub.encrypt(
+            aes_key,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        encrypted_aes_b64 = base64.b64encode(encrypted_aes).decode()
+
+        jwt_token = create_jwt_rs256(did)
+        return RegisterResponse(did=did, jwt=jwt_token, encrypted_aes_key_b64=encrypted_aes_b64)
+    except Exception as e:
+        logging.exception("Device registration failed")
+        raise HTTPException(status_code=500, detail=f"Device registration failed: {str(e)}")
+
+#♡ telemetry endpoint
 @app.post("/telemetry", response_model=TelemetryResponse)
 def telemetry(req: TelemetryRequest, token=Depends(security)):
-    did = verify_jwt(token.credentials)
-    if did not in DEVICES:
-        raise HTTPException(404, "Device not found")
-    aes_key = DEVICES[did]["aes_key"]
+    #♡ Verify JWT and extract DID
+    try:
+        claims = verify_jwt_rs256(token.credentials)
+        did = claims["sub"]
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+    db = next(get_db())
+    device = db.query(Device).filter(Device.did == did).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    aes_key = device.aes_key
+
     payload = req.payload
+    #♡ Decrypt telemetry
     try:
         plaintext = decrypt_aes_gcm(
             aes_key,
@@ -140,34 +247,48 @@ def telemetry(req: TelemetryRequest, token=Depends(security)):
         )
         data = json.loads(plaintext)
     except Exception as e:
-        raise HTTPException(400, f"Decryption failed: {str(e)}")
-    TELEM = TELEMETRY.get(did, [])
-    TELEM.append(data)
-    TELEMETRY[did] = TELEM
+        raise HTTPException(status_code=400, detail=f"Decryption failed: {str(e)}")
+
+    #♡ Store telemetry in DB
+    telemetry_entry = Telemetry(did=did, data=data)
+    db.add(telemetry_entry)
+
+    #♡ Example alert: if latitude > 80
     alert_triggered = False
     if data.get("lat", 0) > 80:
+        alert = Alert(did=did, alert_type="LatitudeThreshold", severity="Medium")
+        db.add(alert)
         alert_triggered = True
+
+    db.commit()
     return TelemetryResponse(status="ok", alert_triggered=alert_triggered)
 
 #=== Blockchain and IPFS integrated logging of single events ===
 @app.post("/log_event")
 def log_event(payload: LogEntryIn, token=Depends(security)):
     verify_jwt(token.credentials)
-    log_entry = {
-        "did": payload.did,
-        "eventType": payload.eventType,
-        "details": payload.details,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    files = {"file": ("log.json", json.dumps(log_entry))}
+    db = next(get_db())
+
+    log_entry_db = EventLog(
+        did=payload.did,
+        event_type=payload.eventType,
+        details=payload.details
+    )
+    db.add(log_entry_db)
+    db.commit()
+
+    #♡ Upload to IPFS & blockchain as before
+    files = {"file": ("log.json", json.dumps(payload.dict()))}
     try:
         resp = requests.post("http://127.0.0.1:5001/api/v0/add", files=files, timeout=5)
         resp.raise_for_status()
         cid = resp.json()["Hash"]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"IPFS upload failed: {e}")
+
     tx_hash = log_event_to_blockchain(payload.did, payload.eventType, f"CID:{cid}")
     return {"message": "Event logged", "ipfs_cid": cid, "tx_hash": tx_hash}
+
 
 #=== Batch event logging using Merkle tree with blockchain proof ===
 @app.post("/log_batch")
@@ -204,23 +325,40 @@ def log_batch(batch: LogBatchIn, token=Depends(security)):
 @app.post("/log_anomaly")
 def log_anomaly(data: AnomalyLogIn, token=Depends(security)):
     verify_jwt(token.credentials)
-    log_entry = {
-        "did": data.did,
-        "source": data.source,
-        "anomalyType": data.anomaly_type,
-        "confidence": data.confidence,
-        "details": data.details,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    files = {"file": ("anomaly.json", json.dumps(log_entry))}
+    db = next(get_db())
+
+    anomaly_entry = AnomalyLog(
+        did=data.did,
+        source=data.source,
+        anomaly_type=data.anomaly_type,
+        confidence=data.confidence,
+        details=data.details
+    )
+    db.add(anomaly_entry)
+    db.commit()
+
+    #♡ Upload to IPFS & blockchain as before
+    files = {"file": ("anomaly.json", json.dumps(data.dict()))}
     try:
         resp = requests.post("http://127.0.0.1:5001/api/v0/add", files=files, timeout=5)
         resp.raise_for_status()
         cid = resp.json()["Hash"]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"IPFS upload failed: {e}")
+
     tx_hash = log_event_to_blockchain(data.did, "AIAnomaly", f"CID:{cid}")
     return {"message": "AI anomaly logged successfully", "ipfs_cid": cid, "transaction_hash": tx_hash}
+
+#♡ Sanitize exceptions
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    return JSONResponse({"detail": exc.detail if isinstance(exc.detail, str) else "Error"},
+                        status_code=exc.status_code)
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc: Exception):
+    logging.exception("Internal server error")
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
