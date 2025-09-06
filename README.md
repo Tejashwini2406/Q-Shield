@@ -30,7 +30,6 @@ Q-Shield+ addresses these challenges by creating a multi-layered, defense-in-dep
   * **Cloud Detector:** A more powerful LSTM Autoencoder model (cloud\_detector.py) is triggered for deeper analysis of data sequences when the edge model flags a potential threat. This allows for the detection of slow, coordinated, and complex attacks.  
 * **Blockchain-Immutable Ledger:** All critical events, such as device registrations, high-severity alerts, and OTA updates, are logged as transactions on a private Ethereum blockchain, creating a tamper-proof, auditable trail.  
 * **End-to-End Encrypted Telemetry:** Device data is encrypted at the source using AES-GCM, with symmetric keys securely exchanged using PQC, ensuring data confidentiality in transit.  
-* **Secure Over-The-Air (OTA) Updates:** A secure mechanism for pushing firmware updates to devices, including key rotation policies to maintain long-term security.  
 * **Geo-Fencing Enforcement:** The system can be configured to trigger alerts if a device reports telemetry from outside a predefined geographical boundary.
 
 ## **System Architecture**
@@ -104,7 +103,7 @@ q-shield-plus/
 ### **Installation Steps**
 
 1. **Clone the repository:**  
-   git clone \<your-repository-url\>  
+   git clone https://github.com/Tejashwini2406/Q-Shield.git  
    cd q-shield-plus
 
 2. **Set up the Backend:**  
