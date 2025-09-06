@@ -7,3 +7,6 @@ cryptography
 pyjwt
 paho-mqtt
 psutil
+pycryptodome
+requests
+web3
