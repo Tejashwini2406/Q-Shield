@@ -1,0 +1,3 @@
+[console_scripts]
+hashes = hashes.__main__:main
+

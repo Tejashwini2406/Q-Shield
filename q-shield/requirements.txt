@@ -1,0 +1,43 @@
+# FastAPI web framework
+fastapi>=0.104.0
+
+# ASGI server
+uvicorn[standard]>=0.24.0
+
+# Pydantic for data validation
+pydantic>=2.4.0
+
+# SQLAlchemy for ORM
+sqlalchemy>=2.0.0
+
+# Database driver (SQLite built-in)
+# For PostgreSQL/MySQL, include psycopg2 or mysqlclient as needed
+
+# Cryptography primitives
+cryptography>=41.0.0
+
+# JSON Web Tokens
+PyJWT>=2.8.0
+
+# OQS-Python wrapper for PQC (if available)
+git+https://github.com/open-quantum-safe/liboqs-python.git
+
+# CPU feature detection
+py-cpuinfo>=9.0.0
+
+# MQTT client (if using MQTT)
+paho-mqtt>=1.6.0
+
+# HTTP requests for device examples
+requests>=2.31.0
+
+# Utility libraries
+psutil>=5.9.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0
+fastapi[all]>=0.104.0

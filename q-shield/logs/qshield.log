@@ -1,0 +1,5 @@
+2025-10-05 01:47:31,428 [INFO] audit:59: Registered device 1
+2025-10-05 01:50:00,871 [INFO] audit:59: Registered device 2
+2025-10-05 01:52:10,599 [INFO] audit:59: Registered device 3
+2025-10-05 01:53:10,529 [INFO] audit:59: Registered device 4
+2025-10-05 01:53:10,544 [INFO] audit:88: Telemetry received from 4
