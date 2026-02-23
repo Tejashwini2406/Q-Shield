@@ -32,5 +32,3 @@ Q-Shield is an advanced security framework designed to provide robust protection
 - After installation, navigate to `http://localhost:3000` in your web browser to access the Q-Shield interface.
 - Follow the on-screen instructions to configure security settings and monitor system activities.
 - Regularly update your application to ensure you have the latest security features and patches.
-
-For additional information or support, please refer to the [documentation](https://github.com/Tejashwini2406/Q-Shield/wiki).
